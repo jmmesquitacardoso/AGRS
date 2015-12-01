@@ -56,7 +56,7 @@ void mapFuncGpu(int * map_data_cluster_index,float *data_x,float *cluster_x,floa
 void reduceFuncGPU(thrust::device_vector<int> &data_cluster_index,thrust::device_vector<float> &data_x,thrust::device_vector<float> &data_y,thrust::device_vector<float> &cendroids_x,thrust::device_vector<float> &cendroids_y)
 {
   cout<<"started reduction"<<endl;
-  thrust::device_vector<int> d_data_cluster_index_x=data_cluster_index;
+  thrust::device_vector<int> d_data_cluster_index=data_cluster_index;
 	thrust::device_vector<float> cendroid_sumx(NUMBER_OF_CLUSTERS);
 	thrust::device_vector<float> cendroid_sumy(NUMBER_OF_CLUSTERS);
 	thrust::device_vector<int> new_data_cluster_index;
@@ -68,7 +68,7 @@ void reduceFuncGPU(thrust::device_vector<int> &data_cluster_index,thrust::device
 	thrust::device_vector<int> data_cluster_index_y=data_cluster_index;
 	cout<<"starting sort"<<endl;
 	//sorts data_x and data_y by key
-	thrust::sort_by_key(d_data_cluster_index_x.begin(),d_data_cluster_index_x.end(),data_x.begin());
+	thrust::sort_by_key(d_data_cluster_index.begin(),d_data_cluster_index.end(),data_x.begin());
   thrust::sort_by_key(data_cluster_index_y.begin(),data_cluster_index_y.end(),data_y.begin());
 	//sums up data_x
   cout<<"starting reduce of x"<<endl;
