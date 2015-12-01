@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cfloat>
 #include <string>
+#include <vector>
+#include <sstream>
 #include <algorithm>
 #include <iterator>
 #include <functional>
@@ -25,6 +27,22 @@ using namespace std;
 #define NUMBER_OF_ELEMENTS 16
 #define NUMBER_OF_CLUSTERS 2
 #define MAX_NUMBER_OF_ITERATIONS 20
+
+
+vector<string> &split(string &s, char delim, vector<string> &elems) {
+    stringstream ss(s);
+    string item;
+    while (getline(ss, item, delim)) {
+        elems.push_back(item);
+    }
+    return elems;
+}
+
+vector<string> split(string &s, char delim) {
+    vector<string> elems;
+    split(s, delim, elems);
+    return elems;
+}
 
 __device__ __host__
 float compute_distance(float x1,float x2,float y1,float y2){
@@ -98,7 +116,7 @@ void reduceFuncGPU(thrust::device_vector<int> &data_cluster_index,thrust::device
 	cendroids_y=cendroid_sumy;
 }
 
-int main(){
+int main() {
   using namespace thrust;
   cout<<"creating host vectors"<<endl;
   host_vector<float> data_x(NUMBER_OF_ELEMENTS);
@@ -127,16 +145,15 @@ int main(){
     cendroids_sumy[i]=0;
   }
 
-  cout<<"loading data from the text files"<<endl;
-  //load data from the two text files
-  ifstream is("a.txt");
-  ifstream is2("b.txt");
-  for (int i=0; i<data_x.size(); i++) {
-    is>>data_x[i];
-  }
+  cout<<"loading data from the text file"<<endl;
 
-  for (int i=0; i<data_y.size(); i++) {
-    is2>>data_y[i];
+  ifstream is("points.txt");
+  for (int i=0; i<NUMBER_OF_ELEMENTS; i++) {
+    string dummy = "";
+    is >> dummy;
+    vector <string> stringTokens = split(dummy,'+');
+    data_x[i] = atoi(stringTokens[0].c_str());
+    data_y[i] = atoi(stringTokens[1].c_str());
   }
 
   cout<<"initializing the data for the two initial cendroids"<<endl;
@@ -169,10 +186,10 @@ int main(){
   int numIt=0;
   while(numIt<MAX_NUMBER_OF_ITERATIONS){
 
-    cout<<"calling the map function"<<endl;
+    cout<<"calling the map function with iteration number "<< numIt << endl;
 
     mapFuncGpu<<<NUMBER_OF_ELEMENTS,1>>>(data_cluster_index_ptr,map_data_x,map_cluster_x,map_data_y,map_cluster_y);
-    done=thrust::equal(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
+    done = thrust::equal(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
     if(done)break;
     thrust::copy(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
     cout<<"finished mapping"<<endl;
@@ -194,5 +211,4 @@ int main(){
   {
     cout<<"the element with index "<<i<<" got mapped in the cluster "<<d_data_cluster_index[i]<<endl;
   }
-  cout<<endl;
 }
