@@ -50,9 +50,9 @@ float compute_distance(float x1,float x2,float y1,float y2){
 }
 
 __global__
-void mapFuncGpu(int * map_data_cluster_index,float *data_x,float *cluster_x,float *data_y,float *cluster_y)
+void mapFunction(int * map_data_cluster_index,float *data_x,float *cluster_x,float *data_y,float *cluster_y)
 {
-  int j=blockIdx.x*blockDim.x+threadIdx.x;
+  int j=blockIdx.x;
   //for all the points do
   int index=0;
   float minDistance=FLT_MAX;
@@ -60,92 +60,89 @@ void mapFuncGpu(int * map_data_cluster_index,float *data_x,float *cluster_x,floa
   for(int i=0;i<NUMBER_OF_CLUSTERS;i++)
   {
     float currDistance=compute_distance(data_x[j],cluster_x[i],data_y[j],cluster_y[i]);
-    //printf( "GPU point with index %d has %f distance from cluster %d \n",j,currDistance,i);
+    //printf( "GPU point with index %d and X = %f and Y = %f has %f distance from cluster %d \n",j,data_x[j],data_y[j],currDistance,i);
     if(currDistance<minDistance)
     {
       minDistance=currDistance;
       index=i;
     }
   }
-  //printf( "GPU point with index %d has minimum distance %f from cluster %d \n",j,minDistance,index);
+  printf( "GPU point with index %d and X = %f and Y = %f has minimum distance %f from cluster %d \n",j,data_x[j],data_y[j],minDistance,index);
   map_data_cluster_index[j]=index;
 }
 
-void reduceFuncGPU(thrust::device_vector<int> &data_cluster_index,thrust::device_vector<float> &data_x,thrust::device_vector<float> &data_y,thrust::device_vector<float> &cendroids_x,thrust::device_vector<float> &cendroids_y)
+void reduce(thrust::device_vector<int> &data_cluster_index,thrust::device_vector<float> &data_x,thrust::device_vector<float> &data_y,thrust::device_vector<float> &centroids_x,thrust::device_vector<float> &centroids_y)
 {
-  cout<<"started reduction"<<endl;
+  cout << "Started reduction" << endl;
   thrust::device_vector<int> d_data_cluster_index=data_cluster_index;
-	thrust::device_vector<float> cendroid_sumx(NUMBER_OF_CLUSTERS);
-	thrust::device_vector<float> cendroid_sumy(NUMBER_OF_CLUSTERS);
-	thrust::device_vector<int> new_data_cluster_index;
-	thrust::fill(cendroid_sumx.begin(),cendroid_sumx.end(),0);
-	thrust::fill(cendroid_sumy.begin(),cendroid_sumy.end(),0);
-  cout<<"created and initialized vectors"<<endl;
+	thrust::device_vector<float> centroid_sumx(NUMBER_OF_CLUSTERS);
+	thrust::device_vector<float> centroid_sumy(NUMBER_OF_CLUSTERS);
+	thrust::device_vector<int> new_data_cluster_index(NUMBER_OF_ELEMENTS);
+	thrust::fill(centroid_sumx.begin(),centroid_sumx.end(),0);
+	thrust::fill(centroid_sumy.begin(),centroid_sumy.end(),0);
 	thrust::plus<float> binary_op;
 	thrust::equal_to<int> binary_pred;
 	thrust::device_vector<int> data_cluster_index_y=data_cluster_index;
-	cout<<"starting sort"<<endl;
-	//sorts data_x and data_y by key
+	cout << "Starting sort by key (grouping the points by cluster)" << endl;
+	//sorts data_x and data_y by key (groups the points by cluster, which means that the points belonging to the first cluster appear first in the vector)
 	thrust::sort_by_key(d_data_cluster_index.begin(),d_data_cluster_index.end(),data_x.begin());
   thrust::sort_by_key(data_cluster_index_y.begin(),data_cluster_index_y.end(),data_y.begin());
 	//sums up data_x
-  cout<<"starting reduce of x"<<endl;
-	thrust::reduce_by_key(d_data_cluster_index.begin(),d_data_cluster_index.end(),data_x.begin(),new_data_cluster_index.begin(),cendroid_sumx.begin(),binary_pred,binary_op);
+  cout << "Reducing the X axis" << endl;
+	thrust::reduce_by_key(d_data_cluster_index.begin(),d_data_cluster_index.end(),data_x.begin(),new_data_cluster_index.begin(),centroid_sumx.begin(),binary_pred,binary_op);
 
 	//sums up data_y
-	cout<<"starting reduce of y"<<endl;
-	thrust::reduce_by_key(d_data_cluster_index.begin(),d_data_cluster_index.end(),data_y.begin(),new_data_cluster_index.begin(),cendroid_sumy.begin(),binary_pred,binary_op);
-  cout<<"finished reduction"<<endl;
+	cout << "Reducing the Y axis" << endl;
+	thrust::reduce_by_key(d_data_cluster_index.begin(),d_data_cluster_index.end(),data_y.begin(),new_data_cluster_index.begin(),centroid_sumy.begin(),binary_pred,binary_op);
+  cout << "Finished reducing the axis" << endl;
 	thrust::device_vector<unsigned int> cluster_begin(NUMBER_OF_ELEMENTS);
   thrust::device_vector<unsigned int> cluster_end(NUMBER_OF_ELEMENTS);
 	thrust::counting_iterator<unsigned int>search_begin(0);
-  cout<<"started counting"<<endl;
+  cout << "Summing" << endl;
 	thrust::lower_bound(d_data_cluster_index.begin(),d_data_cluster_index.end(),search_begin,search_begin+NUMBER_OF_ELEMENTS,cluster_begin.begin());
 	thrust::upper_bound(d_data_cluster_index.begin(),d_data_cluster_index.end(),search_begin,search_begin+NUMBER_OF_ELEMENTS,cluster_end.begin());
 	thrust::device_vector<int> cluster_count_gpu(NUMBER_OF_CLUSTERS);
 	thrust::minus<unsigned int> binary_op2;
 	thrust::divides<float> binary_op3;
 	thrust::transform(cluster_end.begin(),cluster_end.end(),cluster_begin.begin(),cluster_count_gpu.begin(),binary_op2);
-  cout<<"finished counting"<<endl;
-	thrust::transform(cendroid_sumx.begin(),cendroid_sumx.end(),cluster_count_gpu.begin(),cendroid_sumx.begin(),binary_op3);
-	thrust::transform(cendroid_sumy.begin(),cendroid_sumy.end(),cluster_count_gpu.begin(),cendroid_sumy.begin(),binary_op3);
-	cout<<"finished dividing"<<endl;
-	cout<<"the count of the first cluster on the gpu is "<<cluster_count_gpu[0]<<endl;
-	cout<<"the count of the second cluster on the gpu is "<<cluster_count_gpu[1]<<endl;
-	cendroids_x=cendroid_sumx;
-	cendroids_y=cendroid_sumy;
+  cout << "Finished summing" << endl;
+	thrust::transform(centroid_sumx.begin(),centroid_sumx.end(),cluster_count_gpu.begin(),centroid_sumx.begin(),binary_op3);
+	thrust::transform(centroid_sumy.begin(),centroid_sumy.end(),cluster_count_gpu.begin(),centroid_sumy.begin(),binary_op3);
+	cout << "Finished dividing" << endl;
+	cout << "Number of points in the first cluster is " << cluster_count_gpu[0]<<endl;
+	cout << "Number of points in the second cluster is " << cluster_count_gpu[1]<<endl;
+	centroids_x=centroid_sumx;
+	centroids_y=centroid_sumy;
 }
 
 int main() {
   using namespace thrust;
-  cout<<"creating host vectors"<<endl;
   host_vector<float> data_x(NUMBER_OF_ELEMENTS);
   host_vector<float> data_y(NUMBER_OF_ELEMENTS);
   host_vector<int> data_cluster_index(NUMBER_OF_ELEMENTS);
   host_vector<int> initial_centroid_index(NUMBER_OF_CLUSTERS);
-  host_vector<float> cendroids_x(NUMBER_OF_CLUSTERS);
-  host_vector<float> cendroids_y(NUMBER_OF_CLUSTERS);
-  host_vector<float> cendroids_sumx(NUMBER_OF_CLUSTERS);
-  host_vector<float> cendroids_sumy(NUMBER_OF_CLUSTERS);
-  cout<<"initializing cendroids"<<endl;
+  host_vector<float> centroids_x(NUMBER_OF_CLUSTERS);
+  host_vector<float> centroids_y(NUMBER_OF_CLUSTERS);
+  host_vector<float> centroids_sumx(NUMBER_OF_CLUSTERS);
+  host_vector<float> centroids_sumy(NUMBER_OF_CLUSTERS);
+
+  cout << "Initializing the centroids" << endl;
 
   initial_centroid_index[0]=0;
   initial_centroid_index[1]=2;
 
-  cout<<"initializing all points to belong in the sentinel cluster"<<endl;
   //initialize all the points to belong in sentinel cluster -1
-  for (int i=0; i<data_cluster_index.size(); i++) {
+  for (int i = 0; i < data_cluster_index.size(); i++) {
     data_cluster_index[i]=-1;
   }
-  cout<<"initializing the count of all clusters to 0"<<endl;
-  //initialize number of points in all cendroids to 0
 
-  for (int i=0; i<cendroids_sumx.size(); i++) {
-    cendroids_sumx[i]=0;
-    cendroids_sumy[i]=0;
+  //initialize number of points in all centroids to 0
+  for (int i = 0; i < centroids_sumx.size(); i++) {
+    centroids_sumx[i]=0;
+    centroids_sumy[i]=0;
   }
 
-  cout<<"loading data from the text file"<<endl;
+  cout << "Loading the points from the data file" << endl;
 
   ifstream is("points.txt");
   for (int i=0; i<NUMBER_OF_ELEMENTS; i++) {
@@ -156,59 +153,62 @@ int main() {
     data_y[i] = atoi(stringTokens[1].c_str());
   }
 
-  cout<<"initializing the data for the two initial cendroids"<<endl;
-  //initialize the data for the two initial cendroids
-  cendroids_x[0]=data_x[initial_centroid_index[0]];
-  cendroids_y[0]=data_y[initial_centroid_index[0]];
-  cendroids_x[1]=data_x[initial_centroid_index[1]];
-  cendroids_y[1]=data_y[initial_centroid_index[1]];
+  cout << "Initializing the data for the initial centroids" << endl;
+  //initialize the data for the two initial centroids
+  centroids_x[0]=data_x[initial_centroid_index[0]];
+  centroids_y[0]=data_y[initial_centroid_index[0]];
+  centroids_x[1]=data_x[initial_centroid_index[1]];
+  centroids_y[1]=data_y[initial_centroid_index[1]];
 
   //creating and populating device vectors
-  cout<<"creating the device vectors"<<endl;
-  thrust::device_vector<float> d_data_x(NUMBER_OF_ELEMENTS);
-  cout<<"created the data_x vector"<<endl;
-  thrust::device_vector<float> d_data_y(NUMBER_OF_ELEMENTS);
-  cout<<"created the data vectors"<<endl;
+  thrust::device_vector<float> d_data_x = data_x;
+  thrust::device_vector<float> d_data_y = data_y;
 
-  thrust::device_vector<float> d_cendroids_x(NUMBER_OF_CLUSTERS);
-  thrust::device_vector<float> d_cendroids_y(NUMBER_OF_CLUSTERS);
+  thrust::device_vector<float> d_centroids_x = centroids_x;
+  thrust::device_vector<float> d_centroids_y = centroids_y;
 
   thrust::device_vector<int> prev_index(NUMBER_OF_ELEMENTS);
-  thrust::device_vector<int> d_data_cluster_index(NUMBER_OF_ELEMENTS);
+  thrust::device_vector<int> d_data_cluster_index = data_cluster_index;
 
   int * data_cluster_index_ptr=thrust::raw_pointer_cast(&d_data_cluster_index[0]);
-  float *map_cluster_x=thrust::raw_pointer_cast(&d_cendroids_x[0]);
+  float *map_cluster_x=thrust::raw_pointer_cast(&d_centroids_x[0]);
   float *map_data_x=thrust::raw_pointer_cast(&d_data_x[0]);
-  float *map_cluster_y=thrust::raw_pointer_cast(&d_cendroids_y[0]);
+  float *map_cluster_y=thrust::raw_pointer_cast(&d_centroids_y[0]);
   float *map_data_y=thrust::raw_pointer_cast(&d_data_y[0]);
 
-  bool done=false;
-  int numIt=0;
-  while(numIt<MAX_NUMBER_OF_ITERATIONS){
+  bool done = false;
+  int i = 0;
+  while(i < MAX_NUMBER_OF_ITERATIONS) {
 
-    cout<<"calling the map function with iteration number "<< numIt << endl;
+    cout << "Calling the map function with iteration number " << i << endl;
 
-    mapFuncGpu<<<NUMBER_OF_ELEMENTS,1>>>(data_cluster_index_ptr,map_data_x,map_cluster_x,map_data_y,map_cluster_y);
+    mapFunction<<<NUMBER_OF_ELEMENTS,1>>>(data_cluster_index_ptr,map_data_x,map_cluster_x,map_data_y,map_cluster_y);
+    // Check if the corresponding cluster for each point changed
     done = thrust::equal(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
-    if(done)break;
+    if (done) {
+      cout << "Clusters for each point remained the same! Terminating..." << endl;
+      break;
+    } else {
+      cout << "Some points changed their corresponding cluster! Will do another iteration!" << endl;
+    }
+    // Copy this cluster index to another value to compare the next index to it
     thrust::copy(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
-    cout<<"finished mapping"<<endl;
-    reduceFuncGPU(d_data_cluster_index,d_data_x,d_data_y,d_cendroids_x,d_cendroids_y);
-    cout<<"finished reduction"<<endl;
-    numIt++;
-    printf("at iteration %d done is %d \n",numIt,done);
+    cout << "Finished mapping" << endl;
+    reduce(d_data_cluster_index,d_data_x,d_data_y,d_centroids_x,d_centroids_y);
+    cout << "Finished reducing" << endl;
+    i++;
   }
 
-  for(int i=0;i<cendroids_x.size();i++)
+  for(int i=0;i<centroids_x.size();i++)
   {
-    cout<<"the gpu sum_x is "<<d_cendroids_x[i]<<"in the position "<<i<<endl;
-    cout<<"the gpu sum_y is "<<d_cendroids_y[i]<<"in the position "<<i<<endl;
+    cout << "The X axis value of the centroid number " << i << " is " << d_centroids_x[i] << endl;
+    cout << "The Y axis value of the centroid number " << i << " is " << d_centroids_y[i] << endl;
   }
 
-  cout<<endl;
+  cout << "\n\n\n";
 
   for(int i=0;i<d_data_cluster_index.size();i++)
   {
-    cout<<"the element with index "<<i<<" got mapped in the cluster "<<d_data_cluster_index[i]<<endl;
+    cout<<"Element with index " << i << " got mapped in the cluster " << d_data_cluster_index[i] << endl;
   }
 }
