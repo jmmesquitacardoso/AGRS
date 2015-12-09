@@ -36,6 +36,7 @@ using namespace std;
     return EXIT_FAILURE;}} while(0)
 
 int numberOfPoints = 0;
+int numberOfClusters = 0;
 
 __global__ void setup_kernel(curandState *state) {
     int id = threadIdx.x + blockIdx.x * blockDim.x;
@@ -49,8 +50,8 @@ __global__ void generate_normal_kernel(curandState *state, float *data_x, float 
   /* Copy state to local memory for efficiency */
   curandState localState = state[i];
   /* Generate pseudo-random uniforms */
-  data_x[i] = (curand_normal(&localState));
-  data_y[i] = (curand_normal(&localState));
+  data_x[i] = curand_normal(&localState);
+  data_y[i] = curand_normal(&localState);
   /* Copy state back to global memory */
   state[i] = localState;
 }
@@ -123,8 +124,9 @@ void reduce(thrust::device_vector<int> &data_cluster_index,thrust::device_vector
 	thrust::transform(cluster_end.begin(),cluster_end.end(),cluster_begin.begin(),cluster_count_gpu.begin(),binary_op2);
 	thrust::transform(centroid_sumx.begin(),centroid_sumx.end(),cluster_count_gpu.begin(),centroid_sumx.begin(),binary_op3);
 	thrust::transform(centroid_sumy.begin(),centroid_sumy.end(),cluster_count_gpu.begin(),centroid_sumy.begin(),binary_op3);
-	cout << "Number of points in the first cluster is " << cluster_count_gpu[0]<<endl;
-	cout << "Number of points in the second cluster is " << cluster_count_gpu[1]<<endl;
+  for (int i = 0; i < NUMBER_OF_CLUSTERS; i++) {
+    cout << "Number of points in the cluster" << i << " is " << cluster_count_gpu[i] << endl;
+  }
 	centroids_x=centroid_sumx;
 	centroids_y=centroid_sumy;
 }
@@ -134,15 +136,12 @@ int main() {
   srand(time(NULL));
 
   numberOfPoints = rand() % 10000 + 1000;
+  numberOfClusters = rand() % 8 + 2;
+
   curandState *devStates;
   CUDA_CALL(cudaMalloc((void **)&devStates, numberOfPoints * sizeof(curandState)));
 
   setup_kernel<<<numberOfPoints, 1>>>(devStates);
-
-
-  printf("Generating random numbers based on a normal distribution\n");
-
-  //CUDA_CALL(cudaMemcpy(hostResults, devResults, numberOfPoints * sizeof(int), cudaMemcpyDeviceToHost));
 
   host_vector<float> data_x(numberOfPoints);
   host_vector<float> data_y(numberOfPoints);
@@ -151,8 +150,6 @@ int main() {
   host_vector<float> centroids_y(NUMBER_OF_CLUSTERS);
   host_vector<float> centroids_sumx(NUMBER_OF_CLUSTERS);
   host_vector<float> centroids_sumy(NUMBER_OF_CLUSTERS);
-
-  cout << "Initializing the centroids" << endl;
 
   //initialize all the points to belong in sentinel cluster -1
   for (int i = 0; i < data_cluster_index.size(); i++) {
@@ -165,7 +162,7 @@ int main() {
     centroids_sumy[i]=0;
   }
 
-  cout << "Initializing the data for the initial centroids" << endl;
+  printf("Initializing the data for the initial centroids\n");
   centroids_x[0]=0.1;
   centroids_y[0]=0.3;
   centroids_x[1]=0.5;
@@ -193,16 +190,16 @@ int main() {
   int i = 0;
   while(i < MAX_NUMBER_OF_ITERATIONS) {
 
-    cout << "Calling the map function with iteration number " << i << endl;
+    printf("Calling the map function with iteration number %d\n", i);
 
     mapFunction<<<numberOfPoints,1>>>(data_cluster_index_ptr,map_data_x,map_cluster_x,map_data_y,map_cluster_y);
     // Check if the corresponding cluster for each point changed
     done = thrust::equal(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
     if (done) {
-      cout << "Clusters for each point remained the same! Terminating..." << endl;
+      printf("Clusters for each point remained the same! Terminating...\n");
       break;
     } else {
-      cout << "Some points changed their corresponding cluster! Will do another iteration!" << endl;
+      printf("Some points changed their corresponding cluster! Will do another iteration!\n");
     }
     // Copy this cluster index to another value to compare the next index to it
     thrust::copy(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
@@ -210,13 +207,13 @@ int main() {
     i++;
   }
 
-  for(int i=0;i<centroids_x.size();i++)
+  for(int i = 0; i < centroids_x.size(); i++)
   {
     cout << "The X axis value of the centroid number " << i << " is " << d_centroids_x[i] << endl;
     cout << "The Y axis value of the centroid number " << i << " is " << d_centroids_y[i] << endl;
   }
 
-  cout << "\n\n\n";
+  /*printf("\n\n\n");
   int n0 = 0;
   int n1 = 0;
 
@@ -229,6 +226,6 @@ int main() {
     }
   }
 
-  cout << "Number os points in cluster 0 = " << n0 << endl;
-  cout << "Number os points in cluster 1 = " << n1 << endl;
+  printf("Number of points in cluster 0 = %d\n",n0);
+  printf("Number of points in cluster 1 = %d\n",n1);*/
 }
