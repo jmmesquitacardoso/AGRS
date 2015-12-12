@@ -27,8 +27,6 @@
 
 using namespace std;
 #define PI 3.14159265359
-//#define numberOfPoints 16
-#define NUMBER_OF_CLUSTERS 2
 #define MAX_NUMBER_OF_ITERATIONS 20
 
 #define CUDA_CALL(x) do { if((x) != cudaSuccess) { \
@@ -56,50 +54,32 @@ __global__ void generate_normal_kernel(curandState *state, float *data_x, float 
   state[i] = localState;
 }
 
-vector<string> &split(string &s, char delim, vector<string> &elems) {
-    stringstream ss(s);
-    string item;
-    while (getline(ss, item, delim)) {
-        elems.push_back(item);
-    }
-    return elems;
-}
-
-vector<string> split(string &s, char delim) {
-    vector<string> elems;
-    split(s, delim, elems);
-    return elems;
-}
-
 __device__ __host__
-float compute_distance(float x1,float x2,float y1,float y2){
+float compute_distance(float x1,float x2,float y1,float y2) {
   return sqrtf((x2-x1)*(x2-x1)+(y2-y1)*(y2-y1));
 }
 
 __global__
-void mapFunction(int * map_data_cluster_index,float *data_x,float *cluster_x,float *data_y,float *cluster_y)
-{
-  int j=threadIdx.x + blockIdx.x * blockDim.x;
-  int index=0;
-  float minDistance=FLT_MAX;
+void mapFunction(int * map_data_cluster_index, float *data_x, float *cluster_x, float *data_y, float *cluster_y, int numberOfClusters) {
+  int j = threadIdx.x + blockIdx.x * blockDim.x;
+  int index = 0;
+  float minDistance = FLT_MAX;
 
-  for(int i=0;i<NUMBER_OF_CLUSTERS;i++)
-  {
-    float currDistance=compute_distance(data_x[j],cluster_x[i],data_y[j],cluster_y[i]);
-    if(currDistance<minDistance)
+  for(int i = 0; i < numberOfClusters; i++) {
+    float currentDistance = compute_distance(data_x[j],cluster_x[i],data_y[j],cluster_y[i]);
+    if(currentDistance<minDistance)
     {
-      minDistance=currDistance;
-      index=i;
+      minDistance = currentDistance;
+      index = i;
     }
   }
-  map_data_cluster_index[j]=index;
+  map_data_cluster_index[j] = index;
 }
 
-void reduce(thrust::device_vector<int> &data_cluster_index,thrust::device_vector<float> &data_x,thrust::device_vector<float> &data_y,thrust::device_vector<float> &centroids_x,thrust::device_vector<float> &centroids_y, int numberOfPoints)
-{
+void reduceFunction(thrust::device_vector<int> &data_cluster_index,thrust::device_vector<float> &data_x,thrust::device_vector<float> &data_y,thrust::device_vector<float> &centroids_x,thrust::device_vector<float> &centroids_y, int numberOfPoints) {
   thrust::device_vector<int> d_data_cluster_index=data_cluster_index;
-	thrust::device_vector<float> centroid_sumx(NUMBER_OF_CLUSTERS);
-	thrust::device_vector<float> centroid_sumy(NUMBER_OF_CLUSTERS);
+	thrust::device_vector<float> centroid_sumx(numberOfClusters);
+	thrust::device_vector<float> centroid_sumy(numberOfClusters);
 	thrust::device_vector<int> new_data_cluster_index(numberOfPoints);
 	thrust::fill(centroid_sumx.begin(),centroid_sumx.end(),0);
 	thrust::fill(centroid_sumy.begin(),centroid_sumy.end(),0);
@@ -118,17 +98,17 @@ void reduce(thrust::device_vector<int> &data_cluster_index,thrust::device_vector
 	thrust::counting_iterator<unsigned int>search_begin(0);
 	thrust::lower_bound(d_data_cluster_index.begin(),d_data_cluster_index.end(),search_begin,search_begin+numberOfPoints,cluster_begin.begin());
 	thrust::upper_bound(d_data_cluster_index.begin(),d_data_cluster_index.end(),search_begin,search_begin+numberOfPoints,cluster_end.begin());
-	thrust::device_vector<int> cluster_count_gpu(NUMBER_OF_CLUSTERS);
+	thrust::device_vector<int> cluster_count_gpu(numberOfClusters);
 	thrust::minus<unsigned int> binary_op2;
 	thrust::divides<float> binary_op3;
 	thrust::transform(cluster_end.begin(),cluster_end.end(),cluster_begin.begin(),cluster_count_gpu.begin(),binary_op2);
 	thrust::transform(centroid_sumx.begin(),centroid_sumx.end(),cluster_count_gpu.begin(),centroid_sumx.begin(),binary_op3);
 	thrust::transform(centroid_sumy.begin(),centroid_sumy.end(),cluster_count_gpu.begin(),centroid_sumy.begin(),binary_op3);
-  for (int i = 0; i < NUMBER_OF_CLUSTERS; i++) {
+  for (int i = 0; i < numberOfClusters; i++) {
     cout << "Number of points in the cluster" << i << " is " << cluster_count_gpu[i] << endl;
   }
-	centroids_x=centroid_sumx;
-	centroids_y=centroid_sumy;
+	centroids_x = centroid_sumx;
+	centroids_y = centroid_sumy;
 }
 
 int main() {
@@ -143,47 +123,29 @@ int main() {
 
   setup_kernel<<<numberOfPoints, 1>>>(devStates);
 
-  thrust::host_vector<float> data_x(numberOfPoints);
-  thrust::host_vector<float> data_y(numberOfPoints);
   thrust::host_vector<int> data_cluster_index(numberOfPoints);
-  thrust::host_vector<float> centroids_x(NUMBER_OF_CLUSTERS);
-  thrust::host_vector<float> centroids_y(NUMBER_OF_CLUSTERS);
-  thrust::host_vector<float> centroids_sumx(NUMBER_OF_CLUSTERS);
-  thrust::host_vector<float> centroids_sumy(NUMBER_OF_CLUSTERS);
 
   //initialize all the points to belong in sentinel cluster -1
   for (int i = 0; i < data_cluster_index.size(); i++) {
     data_cluster_index[i]=-1;
   }
 
-  //initialize number of points in all centroids to 0
-  for (int i = 0; i < centroids_sumx.size(); i++) {
-    centroids_sumx[i]=0;
-    centroids_sumy[i]=0;
-  }
-
-  centroids_x[0]=0.1;
-  centroids_y[0]=0.3;
-  centroids_x[1]=0.5;
-  centroids_y[1]=0.5;
-
   //creating and populating device vectors
-  thrust::device_vector<float> d_data_x = data_x;
-  thrust::device_vector<float> d_data_y = data_y;
-
-  thrust::device_vector<float> d_centroids_x = centroids_x;
-  thrust::device_vector<float> d_centroids_y = centroids_y;
-
+  thrust::device_vector<float> d_data_x(numberOfPoints);
+  thrust::device_vector<float> d_data_y(numberOfPoints);
+  thrust::device_vector<float> d_centroids_x(numberOfClusters);
+  thrust::device_vector<float> d_centroids_y(numberOfClusters);
   thrust::device_vector<int> prev_index(numberOfPoints);
   thrust::device_vector<int> d_data_cluster_index = data_cluster_index;
 
-  int * data_cluster_index_ptr=thrust::raw_pointer_cast(&d_data_cluster_index[0]);
-  float *map_cluster_x=thrust::raw_pointer_cast(&d_centroids_x[0]);
-  float *map_data_x=thrust::raw_pointer_cast(&d_data_x[0]);
-  float *map_cluster_y=thrust::raw_pointer_cast(&d_centroids_y[0]);
-  float *map_data_y=thrust::raw_pointer_cast(&d_data_y[0]);
+  int * data_cluster_index_ptr = thrust::raw_pointer_cast(&d_data_cluster_index[0]);
+  float *map_cluster_x = thrust::raw_pointer_cast(&d_centroids_x[0]);
+  float *map_data_x = thrust::raw_pointer_cast(&d_data_x[0]);
+  float *map_cluster_y = thrust::raw_pointer_cast(&d_centroids_y[0]);
+  float *map_data_y = thrust::raw_pointer_cast(&d_data_y[0]);
 
   generate_normal_kernel<<<numberOfPoints, 1>>>(devStates, map_data_x, map_data_y);
+  generate_normal_kernel<<<numberOfClusters, 1>>>(devStates, map_cluster_x, map_cluster_y);
 
   bool done = false;
   int i = 0;
@@ -191,7 +153,7 @@ int main() {
 
     printf("Calling the map function with iteration number %d\n", i);
 
-    mapFunction<<<numberOfPoints,1>>>(data_cluster_index_ptr,map_data_x,map_cluster_x,map_data_y,map_cluster_y);
+    mapFunction<<<numberOfPoints,1>>>(data_cluster_index_ptr,map_data_x,map_cluster_x,map_data_y,map_cluster_y, numberOfClusters);
     // Check if the corresponding cluster for each point changed
     done = thrust::equal(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
     if (done) {
@@ -202,11 +164,11 @@ int main() {
     }
     // Copy this cluster index to another value to compare the next index to it
     thrust::copy(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
-    reduce(d_data_cluster_index,d_data_x,d_data_y,d_centroids_x,d_centroids_y,numberOfPoints);
+    reduceFunction(d_data_cluster_index,d_data_x,d_data_y,d_centroids_x,d_centroids_y,numberOfPoints);
     i++;
   }
 
-  for(int i = 0; i < centroids_x.size(); i++)
+  for(int i = 0; i < d_centroids_x.size(); i++)
   {
     cout << "The X axis value of the centroid number " << i << " is " << d_centroids_x[i] << endl;
     cout << "The Y axis value of the centroid number " << i << " is " << d_centroids_y[i] << endl;
