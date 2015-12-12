@@ -132,8 +132,8 @@ void reduce(thrust::device_vector<int> &data_cluster_index,thrust::device_vector
 }
 
 int main() {
-  using namespace thrust;
   srand(time(NULL));
+  clock_t tStart = clock();
 
   numberOfPoints = rand() % 10000 + 1000;
   numberOfClusters = rand() % 8 + 2;
@@ -143,13 +143,13 @@ int main() {
 
   setup_kernel<<<numberOfPoints, 1>>>(devStates);
 
-  host_vector<float> data_x(numberOfPoints);
-  host_vector<float> data_y(numberOfPoints);
-  host_vector<int> data_cluster_index(numberOfPoints);
-  host_vector<float> centroids_x(NUMBER_OF_CLUSTERS);
-  host_vector<float> centroids_y(NUMBER_OF_CLUSTERS);
-  host_vector<float> centroids_sumx(NUMBER_OF_CLUSTERS);
-  host_vector<float> centroids_sumy(NUMBER_OF_CLUSTERS);
+  thrust::host_vector<float> data_x(numberOfPoints);
+  thrust::host_vector<float> data_y(numberOfPoints);
+  thrust::host_vector<int> data_cluster_index(numberOfPoints);
+  thrust::host_vector<float> centroids_x(NUMBER_OF_CLUSTERS);
+  thrust::host_vector<float> centroids_y(NUMBER_OF_CLUSTERS);
+  thrust::host_vector<float> centroids_sumx(NUMBER_OF_CLUSTERS);
+  thrust::host_vector<float> centroids_sumy(NUMBER_OF_CLUSTERS);
 
   //initialize all the points to belong in sentinel cluster -1
   for (int i = 0; i < data_cluster_index.size(); i++) {
@@ -162,7 +162,6 @@ int main() {
     centroids_sumy[i]=0;
   }
 
-  printf("Initializing the data for the initial centroids\n");
   centroids_x[0]=0.1;
   centroids_y[0]=0.3;
   centroids_x[1]=0.5;
@@ -213,19 +212,5 @@ int main() {
     cout << "The Y axis value of the centroid number " << i << " is " << d_centroids_y[i] << endl;
   }
 
-  /*printf("\n\n\n");
-  int n0 = 0;
-  int n1 = 0;
-
-  for(int i=0;i<d_data_cluster_index.size();i++)
-  {
-    if (d_data_cluster_index[i] == 0) {
-      n0++;
-    } else {
-      n1++;
-    }
-  }
-
-  printf("Number of points in cluster 0 = %d\n",n0);
-  printf("Number of points in cluster 1 = %d\n",n1);*/
+  printf("Time taken: %.2fs\n", (double)(clock() - tStart)/CLOCKS_PER_SEC);
 }
