@@ -80,7 +80,7 @@ void reduceFunction(thrust::device_vector<int> &data_cluster_index,thrust::devic
 	thrust::plus<float> binary_op;
 	thrust::equal_to<int> binary_pred;
 	thrust::device_vector<int> data_cluster_index_y=data_cluster_index;
-	//sorts data_x and data_y by key (groups the points by cluster, which means that the points belonging to the first cluster appear first in the vector)
+	//sorts data_x and data_y by key-value (groups the points by cluster, which means that the points belonging to the first cluster appear first in the vector)
 	thrust::sort_by_key(d_data_cluster_index.begin(),d_data_cluster_index.end(),data_x.begin());
   thrust::sort_by_key(data_cluster_index_y.begin(),data_cluster_index_y.end(),data_y.begin());
 	//sums up data_x
