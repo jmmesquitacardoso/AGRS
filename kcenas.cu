@@ -76,17 +76,17 @@ void reduce (int *data_cluster_index, float *data_x, float *data_y, float *centr
 
   int clusterIndex = data_cluster_index[j];
 
-  sumX[clusterIndex] += data_x[j];
-  sumY[clusterIndex] += data_y[j];
-  nElemsX[clusterIndex]++;
-  nElemsY[clusterIndex]++;
+  atomicAdd(&sumX[clusterIndex],data_x[j]);
+  atomicAdd(&sumY[clusterIndex],data_y[j]);
+  atomicAdd(&nElemsX[clusterIndex],1);
+  atomicAdd(&nElemsY[clusterIndex],1);
 }
 
 int main() {
   srand(time(NULL));
   clock_t tStart = clock();
 
-  numberOfPoints = 128;
+  numberOfPoints = 5012;
 
   if (numberOfPoints % 2 == 0) {
     numberOfPoints++;
@@ -176,7 +176,6 @@ int main() {
     for (int j = 0; j < numberOfClusters; j++) {
       d_centroids_x[j] = (float) (hostSumX[j] / hostNElemsX[j]);
       d_centroids_y[j] = (float) (hostSumY[j] / hostNElemsY[j]);
-      printf("Host X = %d and Host Y = %d\n",hostNElemsX[j], hostNElemsY[j]);
       printf("Number of points in cluster %d is %d\n",j,hostNElemsX[j]);
     }
 
