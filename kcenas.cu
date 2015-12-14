@@ -70,52 +70,38 @@ void mapFunction(int * map_data_cluster_index, float *data_x, float *cluster_x, 
   map_data_cluster_index[j] = index;
 }
 
-void reduceFunction(thrust::device_vector<int> &data_cluster_index,thrust::device_vector<float> &data_x,thrust::device_vector<float> &data_y,thrust::device_vector<float> &centroids_x,thrust::device_vector<float> &centroids_y, int numberOfPoints) {
-  thrust::device_vector<int> d_data_cluster_index=data_cluster_index;
-	thrust::device_vector<float> centroid_sumx(numberOfClusters);
-	thrust::device_vector<float> centroid_sumy(numberOfClusters);
-	thrust::device_vector<int> new_data_cluster_index(numberOfPoints);
-	thrust::fill(centroid_sumx.begin(),centroid_sumx.end(),0);
-	thrust::fill(centroid_sumy.begin(),centroid_sumy.end(),0);
-	thrust::plus<float> binary_op;
-	thrust::equal_to<int> binary_pred;
-	thrust::device_vector<int> data_cluster_index_y=data_cluster_index;
-	//sorts data_x and data_y by key-value (groups the points by cluster, which means that the points belonging to the first cluster appear first in the vector)
-	thrust::sort_by_key(d_data_cluster_index.begin(),d_data_cluster_index.end(),data_x.begin());
-  thrust::sort_by_key(data_cluster_index_y.begin(),data_cluster_index_y.end(),data_y.begin());
-	//sums up data_x
-	thrust::reduce_by_key(d_data_cluster_index.begin(),d_data_cluster_index.end(),data_x.begin(),new_data_cluster_index.begin(),centroid_sumx.begin(),binary_pred,binary_op);
-	//sums up data_y
-	thrust::reduce_by_key(d_data_cluster_index.begin(),d_data_cluster_index.end(),data_y.begin(),new_data_cluster_index.begin(),centroid_sumy.begin(),binary_pred,binary_op);
-	thrust::device_vector<unsigned int> cluster_begin(numberOfPoints);
-  thrust::device_vector<unsigned int> cluster_end(numberOfPoints);
-	thrust::counting_iterator<unsigned int>search_begin(0);
-	thrust::lower_bound(d_data_cluster_index.begin(),d_data_cluster_index.end(),search_begin,search_begin+numberOfPoints,cluster_begin.begin());
-	thrust::upper_bound(d_data_cluster_index.begin(),d_data_cluster_index.end(),search_begin,search_begin+numberOfPoints,cluster_end.begin());
-	thrust::device_vector<int> cluster_count_gpu(numberOfClusters);
-	thrust::minus<unsigned int> binary_op2;
-	thrust::divides<float> binary_op3;
-	thrust::transform(cluster_end.begin(),cluster_end.end(),cluster_begin.begin(),cluster_count_gpu.begin(),binary_op2);
-	thrust::transform(centroid_sumx.begin(),centroid_sumx.end(),cluster_count_gpu.begin(),centroid_sumx.begin(),binary_op3);
-	thrust::transform(centroid_sumy.begin(),centroid_sumy.end(),cluster_count_gpu.begin(),centroid_sumy.begin(),binary_op3);
-  for (int i = 0; i < numberOfClusters; i++) {
-    cout << "Number of points in the cluster" << i << " is " << cluster_count_gpu[i] << endl;
-  }
-	centroids_x = centroid_sumx;
-	centroids_y = centroid_sumy;
+__global__
+void reduce (int *data_cluster_index, float *data_x, float *data_y, float *centroids_x, float *centroids_y, float *sumX, float *sumY, int *nElemsX, int *nElemsY) {
+  int j = threadIdx.x + blockIdx.x * blockDim.x;
+
+  int clusterIndex = data_cluster_index[j];
+
+  sumX[clusterIndex] += data_x[j];
+  sumY[clusterIndex] += data_y[j];
+  nElemsX[clusterIndex]++;
+  nElemsY[clusterIndex]++;
 }
 
 int main() {
   srand(time(NULL));
   clock_t tStart = clock();
 
-  numberOfPoints = rand() % 10000 + 1000;
+  numberOfPoints = 128;
+
+  if (numberOfPoints % 2 == 0) {
+    numberOfPoints++;
+  }
+
   numberOfClusters = rand() % 8 + 2;
 
-  curandState *devStates;
-  CUDA_CALL(cudaMalloc((void **)&devStates, numberOfPoints * sizeof(curandState)));
+  int n = numberOfPoints / 128;
 
-  setup_kernel<<<numberOfPoints, 1>>>(devStates);
+  curandState *devStates, *devStates2;
+  CUDA_CALL(cudaMalloc((void **)&devStates, n * 128 * sizeof(curandState)));
+  CUDA_CALL(cudaMalloc((void **)&devStates2, numberOfClusters * sizeof(curandState)));
+
+  setup_kernel<<<n, 128>>>(devStates);
+  setup_kernel<<<numberOfClusters, 1>>>(devStates2);
 
   thrust::host_vector<int> data_cluster_index(numberOfPoints);
 
@@ -138,16 +124,37 @@ int main() {
   float *map_cluster_y = thrust::raw_pointer_cast(&d_centroids_y[0]);
   float *map_data_y = thrust::raw_pointer_cast(&d_data_y[0]);
 
-  generate_normal_kernel<<<numberOfPoints, 1>>>(devStates, map_data_x, map_data_y);
-  generate_normal_kernel<<<numberOfClusters, 1>>>(devStates, map_cluster_x, map_cluster_y);
+  generate_normal_kernel<<<n, 128>>>(devStates, map_data_x, map_data_y);
+  generate_normal_kernel<<<numberOfClusters, 1>>>(devStates2, map_cluster_x, map_cluster_y);
 
   bool done = false;
   int i = 0;
+
   while(i < MAX_NUMBER_OF_ITERATIONS) {
+    float *sumX, *sumY, *hostSumX, *hostSumY;
+    int *nElemsX, *nElemsY, *hostNElemsX, *hostNElemsY;
+
+    CUDA_CALL(cudaMalloc((void **)&sumX, numberOfClusters * sizeof(float)));
+    CUDA_CALL(cudaMemset(sumX, 0, numberOfClusters *  sizeof(float)));
+
+    CUDA_CALL(cudaMalloc((void **)&sumY, numberOfClusters * sizeof(float)));
+    CUDA_CALL(cudaMemset(sumY, 0, numberOfClusters *  sizeof(float)));
+
+    hostSumX = (float *)calloc(numberOfClusters, sizeof(float));
+    hostSumY = (float *)calloc(numberOfClusters, sizeof(float));
+
+    CUDA_CALL(cudaMalloc((void **)&nElemsX, numberOfClusters * sizeof(int)));
+    CUDA_CALL(cudaMemset(nElemsX, 0, numberOfClusters *  sizeof(int)));
+
+    CUDA_CALL(cudaMalloc((void **)&nElemsY, numberOfClusters * sizeof(int)));
+    CUDA_CALL(cudaMemset(nElemsX, 0, numberOfClusters *  sizeof(int)));
+
+    hostNElemsX = (int *)calloc(numberOfClusters, sizeof(int));
+    hostNElemsY = (int *)calloc(numberOfClusters, sizeof(int));
 
     printf("Calling the map function with iteration number %d\n", i);
 
-    mapFunction<<<numberOfPoints,1>>>(data_cluster_index_ptr,map_data_x,map_cluster_x,map_data_y,map_cluster_y, numberOfClusters);
+    mapFunction<<<n, 128>>>(data_cluster_index_ptr,map_data_x,map_cluster_x,map_data_y,map_cluster_y, numberOfClusters);
     // Check if the corresponding cluster for each point changed
     done = thrust::equal(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
     if (done) {
@@ -158,7 +165,21 @@ int main() {
     }
     // Copy this cluster index to another value to compare the next index to it
     thrust::copy(d_data_cluster_index.begin(),d_data_cluster_index.end(),prev_index.begin());
-    reduceFunction(d_data_cluster_index,d_data_x,d_data_y,d_centroids_x,d_centroids_y,numberOfPoints);
+    //reduceFunction(d_data_cluster_index,d_data_x,d_data_y,d_centroids_x,d_centroids_y,numberOfPoints);
+    reduce<<<n, 128>>>(data_cluster_index_ptr, map_data_x, map_data_y, map_cluster_x, map_cluster_y, sumX, sumY, nElemsX, nElemsY);
+
+    CUDA_CALL(cudaMemcpy(hostSumX, sumX, numberOfClusters * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CALL(cudaMemcpy(hostSumY, sumY, numberOfClusters * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CALL(cudaMemcpy(hostNElemsX, nElemsX, numberOfClusters * sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CALL(cudaMemcpy(hostNElemsY, nElemsY, numberOfClusters * sizeof(int), cudaMemcpyDeviceToHost));
+
+    for (int j = 0; j < numberOfClusters; j++) {
+      d_centroids_x[j] = (float) (hostSumX[j] / hostNElemsX[j]);
+      d_centroids_y[j] = (float) (hostSumY[j] / hostNElemsY[j]);
+      printf("Host X = %d and Host Y = %d\n",hostNElemsX[j], hostNElemsY[j]);
+      printf("Number of points in cluster %d is %d\n",j,hostNElemsX[j]);
+    }
+
     i++;
   }
 
