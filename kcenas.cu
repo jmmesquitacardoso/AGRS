@@ -73,8 +73,11 @@ void reduce (int *clusterIndex, float *xPoints, float *yPoints, float *sumX, flo
 }
 
 int main() {
+  cudaSetDevice(1);
+  cudaFree(0);
+
   srand(time(NULL));
-  
+
   clock_t tStart = clock();
 
   numberOfPoints = 5012;
