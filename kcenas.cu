@@ -81,19 +81,20 @@ void calculateNewCentroids (float *xCentroids, float *yCentroids, float *sumX, f
   //printf ("Number of points in cluster %d is %d\n",j,nElemsX[j]);
 }
 
-int main(int agrc, char **argv) {
+int main(int argc, char **argv) {
   cudaSetDevice(1);
   cudaFree(0);
+
+  if (argc < 4) {
+    printf ("Missing arguments!Exiting...\n");
+    return 0;
+  }
 
   srand(time(NULL));
 
   clock_t tStart = clock();
 
   numberOfPoints = atoi(argv[1]);
-
-  if (numberOfPoints % 2 == 0) {
-    numberOfPoints++;
-  }
 
   int t = 0;
 
@@ -103,6 +104,10 @@ int main(int agrc, char **argv) {
     t = 1000;
   }
 
+  if (numberOfPoints < 1000) {
+    t = 1;
+  }
+
   numberOfClusters = atoi(argv[2]);
 
   int tc = 0;
@@ -110,7 +115,11 @@ int main(int agrc, char **argv) {
   if (numberOfClusters % 10 != 0) {
     tc = 64;
   } else {
-    tc = 60;
+    tc = 50;
+  }
+
+  if (numberOfClusters < 64) {
+    tc = 1;
   }
 
   int maxNumberOfIterations = atoi(argv[3]);
@@ -133,20 +142,21 @@ int main(int agrc, char **argv) {
   }
 
   //creating and populating device vectors
-  thrust::device_vector<float> xPoints(numberOfPoints);
-  thrust::device_vector<float> yPoints(numberOfPoints);
   thrust::device_vector<float> xCentroids(numberOfClusters);
   thrust::device_vector<float> yCentroids(numberOfClusters);
   thrust::device_vector<int> previousIndex(numberOfPoints);
   thrust::device_vector<int> deviceClusterIndex = clusterIndex;
 
   int *clusterIndexPointer = thrust::raw_pointer_cast(&deviceClusterIndex[0]);
+  float *xPoints;
+  float *yPoints;
   float *xCentroidsPointer = thrust::raw_pointer_cast(&xCentroids[0]);
-  float *xPointsPointer = thrust::raw_pointer_cast(&xPoints[0]);
   float *yCentroidsPointer = thrust::raw_pointer_cast(&yCentroids[0]);
-  float *yPointsPointer = thrust::raw_pointer_cast(&yPoints[0]);
 
-  generate_normal_kernel<<<n, t>>>(devStates, xPointsPointer, yPointsPointer);
+  CUDA_CALL(cudaMalloc((void **)&xPoints, n * t * sizeof(float)));
+  CUDA_CALL(cudaMalloc((void **)&yPoints, n * t * sizeof(float)));
+
+  generate_normal_kernel<<<n, t>>>(devStates, xPoints, yPoints);
   generate_normal_kernel<<<nc, tc>>>(devStates2, xCentroidsPointer, yCentroidsPointer);
 
   bool done = false;
@@ -170,7 +180,7 @@ int main(int agrc, char **argv) {
 
     printf("Calling the map function with iteration number %d\n", i);
 
-    mapFunction<<<n, t>>>(clusterIndexPointer,xPointsPointer,xCentroidsPointer,yPointsPointer,yCentroidsPointer, numberOfClusters);
+    mapFunction<<<n, t>>>(clusterIndexPointer,xPoints,xCentroidsPointer,yPoints,yCentroidsPointer, numberOfClusters);
     // Check if the corresponding cluster for each point changed
     done = thrust::equal(deviceClusterIndex.begin(),deviceClusterIndex.end(),previousIndex.begin());
     if (done) {
@@ -181,7 +191,7 @@ int main(int agrc, char **argv) {
     }
     // Copy this cluster index to another value to compare the next index to it
     thrust::copy(deviceClusterIndex.begin(),deviceClusterIndex.end(),previousIndex.begin());
-    reduce<<<n, t>>>(clusterIndexPointer, xPointsPointer, yPointsPointer, sumX, sumY, nElemsX, nElemsY);
+    reduce<<<n, t>>>(clusterIndexPointer, xPoints, yPoints, sumX, sumY, nElemsX, nElemsY);
     calculateNewCentroids<<<nc,tc>>>(xCentroidsPointer, yCentroidsPointer, sumX, sumY, nElemsX, nElemsY);
     i++;
   }
