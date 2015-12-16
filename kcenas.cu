@@ -11,7 +11,6 @@
 #include <curand_kernel.h>
 
 using namespace std;
-#define MAX_NUMBER_OF_ITERATIONS 20
 
 #define CUDA_CALL(x) do { if((x) != cudaSuccess) { \
     printf("Error at %s:%d\n",__FILE__,__LINE__); \
@@ -72,7 +71,17 @@ void reduce (int *clusterIndex, float *xPoints, float *yPoints, float *sumX, flo
   atomicAdd(&nElemsY[index],1);
 }
 
-int main() {
+__global__
+void calculateNewCentroids (float *xCentroids, float *yCentroids, float *sumX, float *sumY, int *nElemsX, int * nElemsY) {
+  int j = threadIdx.x + blockIdx.x * blockDim.x;
+
+  xCentroids[j] = (float) (sumX[j] / nElemsX[j]);
+  yCentroids[j] = (float) (sumY[j] / nElemsY[j]);
+
+  //printf ("Number of points in cluster %d is %d\n",j,nElemsX[j]);
+}
+
+int main(int agrc, char **argv) {
   cudaSetDevice(1);
   cudaFree(0);
 
@@ -80,22 +89,41 @@ int main() {
 
   clock_t tStart = clock();
 
-  numberOfPoints = 5012;
+  numberOfPoints = atoi(argv[1]);
 
   if (numberOfPoints % 2 == 0) {
     numberOfPoints++;
   }
 
-  numberOfClusters = rand() % 8 + 2;
+  int t = 0;
 
-  int n = numberOfPoints / 128;
+  if (numberOfPoints % 10 != 0) {
+    t = 1024;
+  } else {
+    t = 1000;
+  }
+
+  numberOfClusters = atoi(argv[2]);
+
+  int tc = 0;
+
+  if (numberOfClusters % 10 != 0) {
+    tc = 64;
+  } else {
+    tc = 60;
+  }
+
+  int maxNumberOfIterations = atoi(argv[3]);
+
+  int n = numberOfPoints / t;
+  int nc = numberOfClusters / tc;
 
   curandState *devStates, *devStates2;
-  CUDA_CALL(cudaMalloc((void **)&devStates, n * 128 * sizeof(curandState)));
-  CUDA_CALL(cudaMalloc((void **)&devStates2, numberOfClusters * sizeof(curandState)));
+  CUDA_CALL(cudaMalloc((void **)&devStates, n * t * sizeof(curandState)));
+  CUDA_CALL(cudaMalloc((void **)&devStates2, nc * tc * sizeof(curandState)));
 
-  setup_kernel<<<n, 128>>>(devStates);
-  setup_kernel<<<numberOfClusters, 1>>>(devStates2);
+  setup_kernel<<<n, t>>>(devStates);
+  setup_kernel<<<nc, tc>>>(devStates2);
 
   thrust::host_vector<int> clusterIndex(numberOfPoints);
 
@@ -118,37 +146,31 @@ int main() {
   float *yCentroidsPointer = thrust::raw_pointer_cast(&yCentroids[0]);
   float *yPointsPointer = thrust::raw_pointer_cast(&yPoints[0]);
 
-  generate_normal_kernel<<<n, 128>>>(devStates, xPointsPointer, yPointsPointer);
-  generate_normal_kernel<<<numberOfClusters, 1>>>(devStates2, xCentroidsPointer, yCentroidsPointer);
+  generate_normal_kernel<<<n, t>>>(devStates, xPointsPointer, yPointsPointer);
+  generate_normal_kernel<<<nc, tc>>>(devStates2, xCentroidsPointer, yCentroidsPointer);
 
   bool done = false;
   int i = 0;
 
-  while(i < MAX_NUMBER_OF_ITERATIONS) {
-    float *sumX, *sumY, *hostSumX, *hostSumY;
-    int *nElemsX, *nElemsY, *hostNElemsX, *hostNElemsY;
+  while(i < maxNumberOfIterations) {
+    float *sumX, *sumY;
+    int *nElemsX, *nElemsY;
 
-    CUDA_CALL(cudaMalloc((void **)&sumX, numberOfClusters * sizeof(float)));
-    CUDA_CALL(cudaMemset(sumX, 0, numberOfClusters *  sizeof(float)));
+    CUDA_CALL(cudaMalloc((void **)&sumX, nc * tc * sizeof(float)));
+    CUDA_CALL(cudaMemset(sumX, 0, nc * tc *  sizeof(float)));
 
-    CUDA_CALL(cudaMalloc((void **)&sumY, numberOfClusters * sizeof(float)));
-    CUDA_CALL(cudaMemset(sumY, 0, numberOfClusters *  sizeof(float)));
+    CUDA_CALL(cudaMalloc((void **)&sumY, nc * tc * sizeof(float)));
+    CUDA_CALL(cudaMemset(sumY, 0, nc * tc *  sizeof(float)));
 
-    hostSumX = (float *)calloc(numberOfClusters, sizeof(float));
-    hostSumY = (float *)calloc(numberOfClusters, sizeof(float));
+    CUDA_CALL(cudaMalloc((void **)&nElemsX, nc * tc * sizeof(int)));
+    CUDA_CALL(cudaMemset(nElemsX, 0, nc * tc *  sizeof(int)));
 
-    CUDA_CALL(cudaMalloc((void **)&nElemsX, numberOfClusters * sizeof(int)));
-    CUDA_CALL(cudaMemset(nElemsX, 0, numberOfClusters *  sizeof(int)));
-
-    CUDA_CALL(cudaMalloc((void **)&nElemsY, numberOfClusters * sizeof(int)));
-    CUDA_CALL(cudaMemset(nElemsY, 0, numberOfClusters *  sizeof(int)));
-
-    hostNElemsX = (int *)calloc(numberOfClusters, sizeof(int));
-    hostNElemsY = (int *)calloc(numberOfClusters, sizeof(int));
+    CUDA_CALL(cudaMalloc((void **)&nElemsY, nc * tc * sizeof(int)));
+    CUDA_CALL(cudaMemset(nElemsY, 0, nc * tc *  sizeof(int)));
 
     printf("Calling the map function with iteration number %d\n", i);
 
-    mapFunction<<<n, 128>>>(clusterIndexPointer,xPointsPointer,xCentroidsPointer,yPointsPointer,yCentroidsPointer, numberOfClusters);
+    mapFunction<<<n, t>>>(clusterIndexPointer,xPointsPointer,xCentroidsPointer,yPointsPointer,yCentroidsPointer, numberOfClusters);
     // Check if the corresponding cluster for each point changed
     done = thrust::equal(deviceClusterIndex.begin(),deviceClusterIndex.end(),previousIndex.begin());
     if (done) {
@@ -159,27 +181,16 @@ int main() {
     }
     // Copy this cluster index to another value to compare the next index to it
     thrust::copy(deviceClusterIndex.begin(),deviceClusterIndex.end(),previousIndex.begin());
-    reduce<<<n, 128>>>(clusterIndexPointer, xPointsPointer, yPointsPointer, sumX, sumY, nElemsX, nElemsY);
-
-    CUDA_CALL(cudaMemcpy(hostSumX, sumX, numberOfClusters * sizeof(float), cudaMemcpyDeviceToHost));
-    CUDA_CALL(cudaMemcpy(hostSumY, sumY, numberOfClusters * sizeof(float), cudaMemcpyDeviceToHost));
-    CUDA_CALL(cudaMemcpy(hostNElemsX, nElemsX, numberOfClusters * sizeof(int), cudaMemcpyDeviceToHost));
-    CUDA_CALL(cudaMemcpy(hostNElemsY, nElemsY, numberOfClusters * sizeof(int), cudaMemcpyDeviceToHost));
-
-    for (int j = 0; j < numberOfClusters; j++) {
-      xCentroids[j] = (float) (hostSumX[j] / hostNElemsX[j]);
-      yCentroids[j] = (float) (hostSumY[j] / hostNElemsY[j]);
-      printf("Number of points in cluster %d is %d\n",j,hostNElemsX[j]);
-    }
-
+    reduce<<<n, t>>>(clusterIndexPointer, xPointsPointer, yPointsPointer, sumX, sumY, nElemsX, nElemsY);
+    calculateNewCentroids<<<nc,tc>>>(xCentroidsPointer, yCentroidsPointer, sumX, sumY, nElemsX, nElemsY);
     i++;
   }
 
-  for(int i = 0; i < xCentroids.size(); i++)
+  /*for(int i = 0; i < xCentroids.size(); i++)
   {
     cout << "The X axis value of the centroid number " << i << " is " << xCentroids[i] << endl;
     cout << "The Y axis value of the centroid number " << i << " is " << yCentroids[i] << endl;
-  }
+  }*/
 
-  printf("Time taken: %.2fs\n", (double)(clock() - tStart)/CLOCKS_PER_SEC);
+  printf("Time taken mapping and reducing: %.5fs\n", (double)(clock() - tStart)/CLOCKS_PER_SEC);
 }
